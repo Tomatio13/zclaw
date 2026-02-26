@@ -7,81 +7,83 @@
   align="right"
 />
 
-The smallest possible AI personal assistant for ESP32.
+ESP32向けの超小型AIパーソナルアシスタント
 
-zclaw is written in C and runs on ESP32 boards with a strict all-in firmware budget target of **<= 888 KiB** on the default build. It supports scheduled tasks, GPIO control, persistent memory, and custom tool composition through natural language.
+zclawはC言語で記述され、ESP32ボード上で動作します。デフォルトビルドでは**888 KiB以下**という厳しいファームウェアサイズ制約を目標に開発されています。スケジュールタスク、GPIO制御、永続メモリ、自然言語によるカスタムツール構成をサポートしています。
 
-The **888 KiB** cap is all-in firmware size, not just app code.
-It includes `zclaw` logic plus ESP-IDF/FreeRTOS runtime, Wi-Fi/networking, TLS/crypto, and cert bundle overhead.
+**888 KiB**の制限はアプリケーションコードだけでなく、ファームウェア全体のサイズです。
+`zclaw`のロジックに加え、ESP-IDF/FreeRTOSランタイム、Wi-Fi/ネットワーク、TLS/暗号化、証明書バンドルのオーバーヘッドを含みます。
 
-Fun to use, fun to hack on.
+使うのも楽しい、ハックするのも楽しい。
 <br clear="right" />
 
-## Full Documentation
+## 完全なドキュメント
 
-Use the docs site for complete guides and reference.
+完全なガイドとリファレンスはドキュメントサイトを参照してください。
 
-- [Full documentation](https://zclaw.dev)
-- [Use cases: useful + fun](https://zclaw.dev/use-cases.html)
-- [Changelog (web)](https://zclaw.dev/changelog.html)
-- [Complete README (verbatim)](https://zclaw.dev/reference/README_COMPLETE.md)
+- [完全なドキュメント](https://zclaw.dev)
+- [ユースケース: 実用的 + 楽しい](https://zclaw.dev/use-cases.html)
+- [変更履歴 (web)](https://zclaw.dev/changelog.html)
+- [完全なREADME (原文)](https://zclaw.dev/reference/README_COMPLETE.md)
+- [再実装アーキテクチャ設計書（Git差分ベース）](docs/reimplementation-architecture-ja.md)
+- [信頼性設計書（Discord + LLM、日本語）](docs/discord-llm-reliability-design-ja.md)
 
 
-## Quick Start
+## クイックスタート
 
-One-line bootstrap (macOS/Linux):
+ワンラインブートストラップ (macOS/Linux):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/tnm/zclaw/main/scripts/bootstrap.sh)
 ```
 
-Already cloned?
+既にクローン済みの場合:
 
 ```bash
 ./install.sh
 ```
 
-Non-interactive install:
+非対話型インストール:
 
 ```bash
 ./install.sh -y
 ```
 
 <details>
-<summary>Setup notes</summary>
+<summary>セットアップ注意事項</summary>
 
-- `bootstrap.sh` clones/updates the repo and then runs `./install.sh`. You can inspect/verify the bootstrap flow first (including `ZCLAW_BOOTSTRAP_SHA256` integrity checks); see the [Getting Started docs](https://zclaw.dev/getting-started.html).
-- For encrypted credentials in flash, use secure mode (`--flash-mode secure` in install flow, or `./scripts/flash-secure.sh` directly).
-- After flashing, provision WiFi + LLM credentials with `./scripts/provision.sh`.
-- You can re-run either `./scripts/provision.sh` or `./scripts/provision-dev.sh` at any time (no reflash required) to update runtime credentials: WiFi SSID/password, LLM backend/model/API key (or Ollama API URL), and Telegram token/chat ID allowlist.
-- Default LLM rate limits are `100/hour` and `1000/day`; change compile-time limits in `main/config.h` (`RATELIMIT_*`).
-- Quick validation path: run `./scripts/web-relay.sh` and send a test message to confirm the device can answer.
-- If serial port is busy, run `./scripts/release-port.sh` and retry.
-- For repeat local reprovisioning without retyping secrets, use `./scripts/provision-dev.sh` with a local profile file (`provision-dev.sh` wraps `provision.sh --yes`).
+- `bootstrap.sh`はリポジトリをクローン/更新してから`./install.sh`を実行します。ブートストラップフローを事前に検査/検証できます（`ZCLAW_BOOTSTRAP_SHA256`整合性チェックを含む）。詳細は[スタートガイド](https://zclaw.dev/getting-started.html)を参照してください。
+- フラッシュ内の認証情報を暗号化するには、セキュアモードを使用します（インストールフローで`--flash-mode secure`、または直接`./scripts/flash-secure.sh`）。
+- フラッシュ書き込み後、`./scripts/provision.sh`でWiFi + LLM認証情報をプロビジョニングします。
+- 実行時認証情報（WiFi SSID/パスワード、LLMバックエンド/モデル/APIキー（またはOllama API URL）、Discordボットトークン/チャンネルID）を更新するには、いつでも`./scripts/provision.sh`または`./scripts/provision-dev.sh`を再実行できます（再書き込み不要）。
+- デフォルトのLLMレート制限は`100/時間`と`1000/日`です。`main/config.h`（`RATELIMIT_*`）でコンパイル時制限を変更できます。
+- クイック検証パス: `./scripts/web-relay.sh`を実行し、テストメッセージを送信してデバイスが応答できることを確認します。
+- シリアルポートがビジーの場合は、`./scripts/release-port.sh`を実行してから再試行してください。
+- シークレットを再入力せずにローカルで再プロビジョニングを繰り返すには、ローカルプロファイルファイル付きで`./scripts/provision-dev.sh`を使用します（`provision-dev.sh`は`provision.sh --yes`をラップしています）。
 
 </details>
 
-## Highlights
+## ハイライト
 
-- Chat via Telegram or hosted web relay
-- Timezone-aware schedules (`daily`, `periodic`, and one-shot `once`)
-- Built-in + user-defined tools
-- GPIO read/write control with guardrails (including bulk `gpio_read_all`)
-- Persistent memory across reboots
-- Persona options: `neutral`, `friendly`, `technical`, `witty`
-- Provider support for Anthropic, OpenAI, OpenRouter, and Ollama (custom endpoint)
+- Discordまたはホスト型Webリレー経由でチャット
+- タイムゾーン対応スケジュール（`daily`、`periodic`、ワンショット`once`）
+- 組み込み + ユーザー定義ツール
+- ガードレール付きGPIO読み書き制御（一括`gpio_read_all`を含む）
+- 再起動間で永続化されるメモリ
+- ペルソナオプション: `neutral`、`friendly`、`technical`、`witty`
+- Anthropic、OpenAI、OpenRouter、Ollama（カスタムエンドポイント）のプロバイダーサポート
 
-## Hardware
+## ハードウェア
 
-Tested targets: **ESP32-C3**, **ESP32-S3**, and **ESP32-C6**.
-Other ESP32 variants should work fine (some may require manual ESP-IDF target setup).
-Tests reports are very welcome!
+動作確認済みターゲット: **ESP32-C3**、**ESP32-S3**、**ESP32-C6**。
+他のESP32 variantsも基本的に動作します（一部はESP-IDFターゲットの手動設定が必要な場合あり）。
+テスト報告をぜひお寄せください！
 
-Recommended starter board: [Seeed XIAO ESP32-C3](https://www.seeedstudio.com/Seeed-XIAO-ESP32C3-p-5431.html)
+推奨スターターボード: [Seeed XIAO ESP32-C3](https://www.seeedstudio.com/Seeed-XIAO-ESP32C3-p-5431.html)
 
-## Local Dev & Hacking
+## ローカル開発とハッキング
 
-Typical fast loop:
+典型的な高速開発ループ:
 
 ```bash
 ./scripts/test.sh host
@@ -91,68 +93,63 @@ Typical fast loop:
 ./scripts/monitor.sh /dev/cu.usbmodem1101
 ```
 
-Profile setup once, then re-use:
+プロファイルを一度セットアップしてから再利用:
 
 ```bash
 ./scripts/provision-dev.sh --write-template
-# edit ~/.config/zclaw/dev.env
+# ~/.config/zclaw/dev.env を編集
 ./scripts/provision-dev.sh --show-config
 ./scripts/provision-dev.sh
-
-# if Telegram keeps replaying stale updates:
-./scripts/telegram-clear-backlog.sh --show-config
 ```
 
-More details in the [Local Dev & Hacking guide](https://zclaw.dev/local-dev.html).
+詳細は[ローカル開発 & ハッキングガイド](https://zclaw.dev/local-dev.html)を参照してください。
 
-### Other Useful Scripts
+### その他の便利なスクリプト
 
 <details>
-<summary>Show scripts</summary>
+<summary>スクリプトを表示</summary>
 
-- `./scripts/flash-secure.sh` - Flash with encryption
-- `./scripts/provision.sh` - Provision credentials to NVS
-- `./scripts/provision-dev.sh` - Local profile wrapper for repeat provisioning
-- `./scripts/telegram-clear-backlog.sh` - Clear queued Telegram updates
-- `./scripts/erase.sh` - Erase NVS only (`--nvs`) or full flash (`--all`) with guardrails
-- `./scripts/monitor.sh` - Serial monitor
-- `./scripts/emulate.sh` - Run QEMU profile
-- `./scripts/web-relay.sh` - Hosted relay + mobile chat UI
-- `./scripts/benchmark.sh` - Benchmark relay/serial latency
-- `./scripts/test.sh` - Run host/device test flows
-- `./scripts/test-api.sh` - Run live provider API checks (manual/local)
+- `./scripts/flash-secure.sh` - 暗号化付きでフラッシュ書き込み
+- `./scripts/provision.sh` - NVSに認証情報をプロビジョニング
+- `./scripts/provision-dev.sh` - 繰り返しプロビジョニング用ローカルプロファイルラッパー
+- `./scripts/erase.sh` - NVSのみ（`--nvs`）またはフルフラッシュ（`--all`）をガードレール付きで消去
+- `./scripts/monitor.sh` - シリアルモニター
+- `./scripts/emulate.sh` - QEMUプロファイルを実行
+- `./scripts/web-relay.sh` - ホスト型リレー + モバイルチャットUI
+- `./scripts/benchmark.sh` - リレー/シリアルレイテンシのベンチマーク
+- `./scripts/test.sh` - ホスト/デバイステストフローを実行
+- `./scripts/test-api.sh` - ライブプロバイダーAPIチェックを実行（手動/ローカル）
 
 </details>
 
-## Size Breakdown
+## サイズ内訳
 
-Current default `esp32s3` breakdown (grouped loadable image bytes from `idf.py -B build size-components`; rows sum to total image size):
+現在のデフォルト`esp32s3`の内訳（`idf.py -B build size-components`からのグループ化可能なイメージバイト数；行の合計は総イメージサイズ）:
 
-| Segment | Bytes | Size | Share |
+| セグメント | バイト数 | サイズ | シェア |
 | --- | ---: | ---: | ---: |
-| zclaw app logic (`libmain.a`) | `35742` | ~34.9 KiB | ~4.1% |
-| Wi-Fi + networking stack | `397356` | ~388.0 KiB | ~45.7% |
-| TLS/crypto stack | `112922` | ~110.3 KiB | ~13.0% |
-| cert bundle + app metadata | `99722` | ~97.4 KiB | ~11.5% |
-| other ESP-IDF/runtime/drivers/libc | `224096` | ~218.8 KiB | ~25.8% |
+| zclawアプリロジック (`libmain.a`) | `35742` | ~34.9 KiB | ~4.1% |
+| Wi-Fi + ネットワークスタック | `397356` | ~388.0 KiB | ~45.7% |
+| TLS/暗号化スタック | `112922` | ~110.3 KiB | ~13.0% |
+| 証明書バンドル + アプリメタデータ | `99722` | ~97.4 KiB | ~11.5% |
+| その他ESP-IDF/ランタイム/ドライバ/libc | `224096` | ~218.8 KiB | ~25.8% |
 
-Total image size from this build is `869838` bytes; padded `zclaw.bin` is `869952` bytes (~849.6 KiB), still under the cap.
+このビルドの総イメージサイズは`869838`バイト；パディングされた`zclaw.bin`は`869952`バイト（~849.6 KiB）で、依然として制限未満です。
 
-## Latency Benchmarking
+## レイテンシベンチマーク
 
-Relay path benchmark (includes web relay processing + device round trip):
+リレーパスベンチマーク（Webリレー処理 + デバイス往復を含む）:
 
 ```bash
 ./scripts/benchmark.sh --mode relay --count 20 --message "ping"
 ```
 
-Direct serial benchmark (host round trip + first response time). If firmware logs
-`METRIC request ...` lines, the report also includes device-side timing:
+ダイレクトシリアルベンチマーク（ホスト往復 + 最初の応答時間）。ファームウェアが`METRIC request ...`行をログ出力する場合、レポートにはデバイス側のタイミングも含まれます:
 
 ```bash
 ./scripts/benchmark.sh --mode serial --serial-port /dev/cu.usbmodem1101 --count 20 --message "ping"
 ```
 
-## License
+## ライセンス
 
 MIT

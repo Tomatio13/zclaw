@@ -16,8 +16,8 @@ BACKEND_OVERRIDE=""
 MODEL_OVERRIDE=""
 API_KEY_OVERRIDE=""
 API_URL_OVERRIDE=""
-TG_TOKEN_OVERRIDE=""
-TG_CHAT_IDS_OVERRIDE=""
+DISCORD_BOT_TOKEN_OVERRIDE=""
+DISCORD_CHANNEL_ID_OVERRIDE=""
 SHOW_CONFIG=false
 WRITE_TEMPLATE=false
 SKIP_API_CHECK=false
@@ -77,10 +77,9 @@ ZCLAW_API_KEY=
 # OPENROUTER_API_KEY=
 # OLLAMA_API_KEY=
 
-# Optional Telegram credentials:
-ZCLAW_TG_TOKEN=
-ZCLAW_TG_CHAT_ID=
-ZCLAW_TG_CHAT_IDS=
+# Optional Discord credentials:
+ZCLAW_DISCORD_BOT_TOKEN=
+ZCLAW_DISCORD_CHANNEL_ID=
 EOF
     chmod 600 "$ENV_FILE"
     echo "Wrote template: $ENV_FILE"
@@ -262,19 +261,14 @@ while [ $# -gt 0 ]; do
             API_URL_OVERRIDE="$2"
             shift 2
             ;;
-        --tg-token)
-            [ $# -ge 2 ] || { echo "Error: --tg-token requires a value."; exit 1; }
-            TG_TOKEN_OVERRIDE="$2"
+        --discord-token)
+            [ $# -ge 2 ] || { echo "Error: --discord-token requires a value."; exit 1; }
+            DISCORD_BOT_TOKEN_OVERRIDE="$2"
             shift 2
             ;;
-        --tg-chat-id)
-            [ $# -ge 2 ] || { echo "Error: --tg-chat-id requires a value."; exit 1; }
-            TG_CHAT_IDS_OVERRIDE="$2"
-            shift 2
-            ;;
-        --tg-chat-ids)
-            [ $# -ge 2 ] || { echo "Error: --tg-chat-ids requires a value."; exit 1; }
-            TG_CHAT_IDS_OVERRIDE="$2"
+        --discord-channel)
+            [ $# -ge 2 ] || { echo "Error: --discord-channel requires a value."; exit 1; }
+            DISCORD_CHANNEL_ID_OVERRIDE="$2"
             shift 2
             ;;
         --show-config)
@@ -330,8 +324,8 @@ SSID="${SSID_OVERRIDE:-${ZCLAW_WIFI_SSID:-}}"
 BACKEND="${BACKEND_OVERRIDE:-${ZCLAW_BACKEND:-openai}}"
 MODEL="${MODEL_OVERRIDE:-${ZCLAW_MODEL:-}}"
 API_URL="${API_URL_OVERRIDE:-${ZCLAW_API_URL:-}}"
-TG_TOKEN="${TG_TOKEN_OVERRIDE:-${ZCLAW_TG_TOKEN:-}}"
-TG_CHAT_IDS="${TG_CHAT_IDS_OVERRIDE:-${ZCLAW_TG_CHAT_IDS:-${ZCLAW_TG_CHAT_ID:-}}}"
+DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN_OVERRIDE:-${ZCLAW_DISCORD_BOT_TOKEN:-}}"
+DISCORD_CHANNEL_ID="${DISCORD_CHANNEL_ID_OVERRIDE:-${ZCLAW_DISCORD_CHANNEL_ID:-}}"
 
 if [ "$PASS_OVERRIDE_SET" = true ]; then
     WIFI_PASS="$PASS_OVERRIDE"
@@ -359,7 +353,7 @@ fi
 
 if [ "$SHOW_CONFIG" = true ]; then
     BOT_ID=""
-    if BOT_ID="$(extract_bot_id "$TG_TOKEN" 2>/dev/null)"; then
+    if BOT_ID="$(extract_bot_id "$DISCORD_BOT_TOKEN" 2>/dev/null)"; then
         :
     else
         BOT_ID="<empty>"
@@ -372,9 +366,8 @@ if [ "$SHOW_CONFIG" = true ]; then
     echo "  Model: ${MODEL:-<provider default>}"
     echo "  API key: $(mask_secret "$API_KEY")"
     echo "  API URL: ${API_URL:-<default>}"
-    echo "  Telegram bot ID: $BOT_ID (safe identifier)"
-    echo "  Telegram token: $(mask_secret "$TG_TOKEN")"
-    echo "  Telegram chat ID(s): $(mask_chat_id "$TG_CHAT_IDS")"
+    echo "  Discord bot token: $(mask_secret "$DISCORD_BOT_TOKEN")"
+    echo "  Discord channel ID: $(mask_chat_id "$DISCORD_CHANNEL_ID")"
 fi
 
 PROVISION_ARGS=(--yes)
@@ -397,11 +390,11 @@ fi
 if [ -n "$API_URL" ]; then
     PROVISION_ARGS+=(--api-url "$API_URL")
 fi
-if [ -n "$TG_TOKEN" ]; then
-    PROVISION_ARGS+=(--tg-token "$TG_TOKEN")
+if [ -n "$DISCORD_BOT_TOKEN" ]; then
+    PROVISION_ARGS+=(--discord-token "$DISCORD_BOT_TOKEN")
 fi
-if [ -n "$TG_CHAT_IDS" ]; then
-    PROVISION_ARGS+=(--tg-chat-id "$TG_CHAT_IDS")
+if [ -n "$DISCORD_CHANNEL_ID" ]; then
+    PROVISION_ARGS+=(--discord-channel "$DISCORD_CHANNEL_ID")
 fi
 if [ "$SKIP_API_CHECK" = true ]; then
     PROVISION_ARGS+=(--skip-api-check)

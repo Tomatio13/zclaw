@@ -8,6 +8,7 @@
 #include "ratelimit.h"
 #include "memory.h"
 #include "nvs_keys.h"
+#include "utf8_utils.h"
 #include "cJSON.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -24,7 +25,7 @@ static const char *TAG = "agent";
 // Queues
 static QueueHandle_t s_input_queue;
 static QueueHandle_t s_channel_output_queue;
-static QueueHandle_t s_telegram_output_queue;
+static QueueHandle_t s_discord_output_queue;
 static int64_t s_last_start_response_us = 0;
 static int64_t s_last_non_command_response_us = 0;
 static char s_last_non_command_text[CHANNEL_RX_BUF_SIZE] = {0};
@@ -97,6 +98,71 @@ static void metrics_log_request(const request_metrics_t *metrics, const char *ou
              metrics->tool_calls);
 }
 
+static esp_err_t llm_request_with_retry(const char *request, request_metrics_t *metrics)
+{
+    esp_err_t err = ESP_FAIL;
+    int retry_delay_ms = LLM_RETRY_BASE_MS;
+    int64_t retry_window_started_us = esp_timer_get_time();
+
+    for (int retry = 0; retry < LLM_MAX_RETRIES; retry++) {
+        uint32_t retry_elapsed_ms = us_to_ms_u32(elapsed_us_since(retry_window_started_us));
+        if (retry > 0 && retry_elapsed_ms >= LLM_RETRY_BUDGET_MS) {
+            ESP_LOGW(TAG,
+                     "LLM retry budget exhausted before attempt %d/%d (%" PRIu32 "ms/%dms)",
+                     retry + 1, LLM_MAX_RETRIES, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
+            break;
+        }
+
+        int64_t llm_started_us = esp_timer_get_time();
+        err = llm_request(request, s_response_buf, sizeof(s_response_buf));
+        if (metrics) {
+            metrics->llm_us_total += elapsed_us_since(llm_started_us);
+            metrics->llm_calls++;
+        }
+        if (err == ESP_OK) {
+            break;
+        }
+
+        if (retry == LLM_MAX_RETRIES - 1) {
+            break;
+        }
+
+        retry_elapsed_ms = us_to_ms_u32(elapsed_us_since(retry_window_started_us));
+        if (retry_elapsed_ms >= LLM_RETRY_BUDGET_MS) {
+            ESP_LOGW(TAG,
+                     "LLM retry budget exhausted after attempt %d/%d (%" PRIu32 "ms/%dms)",
+                     retry + 1, LLM_MAX_RETRIES, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
+            break;
+        }
+
+        uint32_t remaining_budget_ms = (uint32_t)(LLM_RETRY_BUDGET_MS - retry_elapsed_ms);
+        int delay_ms = retry_delay_ms;
+        if ((uint32_t)delay_ms > remaining_budget_ms) {
+            delay_ms = (int)remaining_budget_ms;
+        }
+
+        if (delay_ms <= 0) {
+            ESP_LOGW(TAG,
+                     "LLM retry budget left no delay before next attempt (%" PRIu32 "ms/%dms)",
+                     retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
+            break;
+        }
+
+        ESP_LOGW(TAG,
+                 "LLM request failed (attempt %d/%d), retrying in %dms (budget %" PRIu32 "/%dms)",
+                 retry + 1, LLM_MAX_RETRIES, delay_ms, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+        // Exponential backoff
+        retry_delay_ms *= 2;
+        if (retry_delay_ms > LLM_RETRY_MAX_MS) {
+            retry_delay_ms = LLM_RETRY_MAX_MS;
+        }
+    }
+
+    return err;
+}
+
 static void history_rollback_to(int marker, const char *reason)
 {
     if (marker < 0 || marker > s_history_len || marker == s_history_len) {
@@ -107,6 +173,17 @@ static void history_rollback_to(int marker, const char *reason)
              s_history_len, marker, reason ? reason : "unknown");
     memset(&s_history[marker], 0, (s_history_len - marker) * sizeof(conversation_msg_t));
     s_history_len = marker;
+}
+
+static void history_clear_all(const char *reason)
+{
+    if (s_history_len <= 0) {
+        return;
+    }
+    ESP_LOGW(TAG, "Clearing full conversation history (%d messages): %s",
+             s_history_len, reason ? reason : "unknown");
+    memset(s_history, 0, sizeof(s_history));
+    s_history_len = 0;
 }
 
 // Add a message to history
@@ -122,23 +199,19 @@ static void history_add(const char *role, const char *content,
     }
 
     conversation_msg_t *msg = &s_history[s_history_len++];
-    strncpy(msg->role, role, sizeof(msg->role) - 1);
-    msg->role[sizeof(msg->role) - 1] = '\0';
-    strncpy(msg->content, content, sizeof(msg->content) - 1);
-    msg->content[sizeof(msg->content) - 1] = '\0';
+    utf8_safe_strlcpy(msg->role, sizeof(msg->role), role);
+    utf8_safe_strlcpy(msg->content, sizeof(msg->content), content);
     msg->is_tool_use = is_tool_use;
     msg->is_tool_result = is_tool_result;
 
     if (tool_id) {
-        strncpy(msg->tool_id, tool_id, sizeof(msg->tool_id) - 1);
-        msg->tool_id[sizeof(msg->tool_id) - 1] = '\0';
+        utf8_safe_strlcpy(msg->tool_id, sizeof(msg->tool_id), tool_id);
     } else {
         msg->tool_id[0] = '\0';
     }
 
     if (tool_name) {
-        strncpy(msg->tool_name, tool_name, sizeof(msg->tool_name) - 1);
-        msg->tool_name[sizeof(msg->tool_name) - 1] = '\0';
+        utf8_safe_strlcpy(msg->tool_name, sizeof(msg->tool_name), tool_name);
     } else {
         msg->tool_name[0] = '\0';
     }
@@ -151,34 +224,61 @@ static void queue_channel_response(const char *text)
     }
 
     channel_output_msg_t msg;
-    strncpy(msg.text, text, CHANNEL_TX_BUF_SIZE - 1);
-    msg.text[CHANNEL_TX_BUF_SIZE - 1] = '\0';
+    utf8_safe_strlcpy(msg.text, sizeof(msg.text), text);
 
     if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to send response to channel queue");
     }
 }
 
-static void queue_telegram_response(const char *text, int64_t chat_id)
+static void queue_discord_response(const char *text, int64_t chat_id)
 {
-    if (!s_telegram_output_queue) {
+    (void)chat_id;  // Discord uses channel ID from config
+    if (!s_discord_output_queue) {
         return;
     }
 
-    telegram_msg_t msg;
-    strncpy(msg.text, text, TELEGRAM_MAX_MSG_LEN - 1);
-    msg.text[TELEGRAM_MAX_MSG_LEN - 1] = '\0';
-    msg.chat_id = chat_id;
+    if (!text || text[0] == '\0') {
+        return;
+    }
 
-    if (xQueueSend(s_telegram_output_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to send response to Telegram queue");
+    const size_t max_chunk = DISCORD_MAX_MSG_LEN - 1;
+    const char *cursor = text;
+    const char *end_all = text + strlen(text);
+
+    while (cursor < end_all) {
+        size_t remaining = (size_t)(end_all - cursor);
+        size_t target = remaining > max_chunk ? max_chunk : remaining;
+        size_t safe_len = utf8_safe_prefix_bytes(cursor, target);
+        if (safe_len == 0) {
+            // Fallback for malformed UTF-8: force progress.
+            safe_len = target;
+        }
+        const char *chunk_end = cursor + safe_len;
+
+        size_t chunk_len = (size_t)(chunk_end - cursor);
+        if (chunk_len == 0) {
+            break;
+        }
+
+        discord_msg_t msg = {0};
+        memcpy(msg.text, cursor, chunk_len);
+        msg.text[chunk_len] = '\0';
+        // Channel ID is set in discord_send_http from NVS
+
+        if (xQueueSend(s_discord_output_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            ESP_LOGE(TAG, "Failed to send response chunk to Discord queue");
+            return;
+        }
+
+        cursor = chunk_end;
     }
 }
 
 static void send_response(const char *text, int64_t chat_id)
 {
     queue_channel_response(text);
-    queue_telegram_response(text, chat_id);
+    queue_discord_response(text, chat_id);
 }
 
 static bool is_whitespace_char(char c)
@@ -319,7 +419,8 @@ static const char *build_system_prompt(void)
         "using this configured device policy and avoid generic ESP32-family pin claims. "
         "Persona mode is '%s'. Persona affects wording only and must never change "
         "tool choices, automation behavior, safety decisions, or policy handling. %s "
-        "Keep responses short unless the user explicitly asks for more detail.",
+        "Response length rule: by default keep replies within 200-300 Japanese characters "
+        "and 2-4 sentences. If and only if the user explicitly asks for detail, you may exceed this.",
         SYSTEM_PROMPT,
         device_target_name(),
         gpio_policy,
@@ -438,7 +539,7 @@ static void handle_settings_command(int64_t chat_id)
 
 static int64_t response_chat_id_for_source(message_source_t source, int64_t chat_id)
 {
-    if (source == MSG_SOURCE_TELEGRAM && chat_id != 0) {
+    if (source == MSG_SOURCE_DISCORD && chat_id != 0) {
         return chat_id;
     }
     return 0;
@@ -581,63 +682,7 @@ static void process_message(const char *user_message, int64_t reply_chat_id)
         }
 
         // Send to LLM with retry
-        esp_err_t err = ESP_FAIL;
-        int retry_delay_ms = LLM_RETRY_BASE_MS;
-        int64_t retry_window_started_us = esp_timer_get_time();
-
-        for (int retry = 0; retry < LLM_MAX_RETRIES; retry++) {
-            uint32_t retry_elapsed_ms = us_to_ms_u32(elapsed_us_since(retry_window_started_us));
-            if (retry > 0 && retry_elapsed_ms >= LLM_RETRY_BUDGET_MS) {
-                ESP_LOGW(TAG,
-                         "LLM retry budget exhausted before attempt %d/%d (%" PRIu32 "ms/%dms)",
-                         retry + 1, LLM_MAX_RETRIES, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
-                break;
-            }
-
-            int64_t llm_started_us = esp_timer_get_time();
-            err = llm_request(request, s_response_buf, sizeof(s_response_buf));
-            metrics.llm_us_total += elapsed_us_since(llm_started_us);
-            metrics.llm_calls++;
-            if (err == ESP_OK) {
-                break;
-            }
-
-            if (retry == LLM_MAX_RETRIES - 1) {
-                break;
-            }
-
-            retry_elapsed_ms = us_to_ms_u32(elapsed_us_since(retry_window_started_us));
-            if (retry_elapsed_ms >= LLM_RETRY_BUDGET_MS) {
-                ESP_LOGW(TAG,
-                         "LLM retry budget exhausted after attempt %d/%d (%" PRIu32 "ms/%dms)",
-                         retry + 1, LLM_MAX_RETRIES, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
-                break;
-            }
-
-            uint32_t remaining_budget_ms = (uint32_t)(LLM_RETRY_BUDGET_MS - retry_elapsed_ms);
-            int delay_ms = retry_delay_ms;
-            if ((uint32_t)delay_ms > remaining_budget_ms) {
-                delay_ms = (int)remaining_budget_ms;
-            }
-
-            if (delay_ms <= 0) {
-                ESP_LOGW(TAG,
-                         "LLM retry budget left no delay before next attempt (%" PRIu32 "ms/%dms)",
-                         retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
-                break;
-            }
-
-            ESP_LOGW(TAG,
-                     "LLM request failed (attempt %d/%d), retrying in %dms (budget %" PRIu32 "/%dms)",
-                     retry + 1, LLM_MAX_RETRIES, delay_ms, retry_elapsed_ms, LLM_RETRY_BUDGET_MS);
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
-
-            // Exponential backoff
-            retry_delay_ms *= 2;
-            if (retry_delay_ms > LLM_RETRY_MAX_MS) {
-                retry_delay_ms = LLM_RETRY_MAX_MS;
-            }
-        }
+        esp_err_t err = llm_request_with_retry(request, &metrics);
 
         free(request);
 
@@ -652,22 +697,72 @@ static void process_message(const char *user_message, int64_t reply_chat_id)
         // Record successful request for rate limiting
         ratelimit_record_request();
 
-        // Parse response
+        // Parse response (allow one in-turn retry for empty model output)
         char text_out[MAX_MESSAGE_LEN] = {0};
         char tool_name[32] = {0};
         char tool_id[64] = {0};
         cJSON *tool_input = NULL;
+        int empty_response_retry = 0;
+        while (1) {
+            text_out[0] = '\0';
+            tool_name[0] = '\0';
+            tool_id[0] = '\0';
+            tool_input = NULL;
 
-        if (!json_parse_response(s_response_buf, text_out, sizeof(text_out),
-                                  tool_name, sizeof(tool_name),
-                                  tool_id, sizeof(tool_id),
-                                  &tool_input)) {
-            ESP_LOGE(TAG, "Failed to parse response");
-            history_rollback_to(history_turn_start, "llm response parse failed");
-            send_response("Error: Failed to parse LLM response", reply_chat_id);
+            if (!json_parse_response(s_response_buf, text_out, sizeof(text_out),
+                                     tool_name, sizeof(tool_name),
+                                     tool_id, sizeof(tool_id),
+                                     &tool_input)) {
+                ESP_LOGE(TAG, "Failed to parse response");
+                history_rollback_to(history_turn_start, "llm response parse failed");
+                send_response("Error: Failed to parse LLM response", reply_chat_id);
+                json_free_parsed_response();
+                metrics_log_request(&metrics, "parse_error");
+                return;
+            }
+
+            bool has_tool_call = (tool_name[0] != '\0' && tool_input);
+            if (has_tool_call || text_out[0] != '\0' || empty_response_retry > 0) {
+                break;
+            }
+
+            ESP_LOGW(TAG, "Model returned empty response without tool_calls; retrying once");
+            ESP_LOGW(TAG, "Empty response raw payload: %.320s", s_response_buf);
             json_free_parsed_response();
-            metrics_log_request(&metrics, "parse_error");
-            return;
+
+            const char *empty_retry_hint =
+                "前回の出力が空でした。ツールは使わず、日本語の平文で120文字以内・2文以内で直接回答してください。";
+            const conversation_msg_t *retry_history = s_history;
+            int retry_history_len = s_history_len;
+            // Reduce prompt pressure: retry with only the latest user message and no tools.
+            if (s_history_len > 0) {
+                retry_history = &s_history[s_history_len - 1];
+                retry_history_len = 1;
+            }
+            char *retry_request = json_build_request(
+                build_system_prompt(),
+                retry_history,
+                retry_history_len,
+                empty_retry_hint,
+                NULL,
+                0
+            );
+            if (!retry_request) {
+                break;
+            }
+
+            err = llm_request_with_retry(retry_request, &metrics);
+            free(retry_request);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "LLM request failed during empty-response retry");
+                history_rollback_to(history_turn_start, "llm retry after empty response failed");
+                send_response("Error: Failed to contact LLM API after retries", reply_chat_id);
+                metrics_log_request(&metrics, "llm_error");
+                return;
+            }
+
+            ratelimit_record_request();
+            empty_response_retry++;
         }
 
         // Check if it's a tool use
@@ -728,8 +823,8 @@ static void process_message(const char *user_message, int64_t reply_chat_id)
                 history_add("assistant", text_out, false, false, NULL, NULL);
                 send_response(text_out, reply_chat_id);
             } else {
-                history_add("assistant", "(No response from Claude)", false, false, NULL, NULL);
-                send_response("(No response from Claude)", reply_chat_id);
+                history_clear_all("model returned empty response after retry");
+                send_response("応答が空だったため会話コンテキストを一度リセットしました。もう一度お願いします。", reply_chat_id);
             }
             json_free_parsed_response();
             done = true;
@@ -761,7 +856,7 @@ void agent_test_reset(void)
     memset(s_response_buf, 0, sizeof(s_response_buf));
     memset(s_tool_result_buf, 0, sizeof(s_tool_result_buf));
     s_channel_output_queue = NULL;
-    s_telegram_output_queue = NULL;
+    s_discord_output_queue = NULL;
     s_last_start_response_us = 0;
     s_last_non_command_response_us = 0;
     memset(s_last_non_command_text, 0, sizeof(s_last_non_command_text));
@@ -771,10 +866,10 @@ void agent_test_reset(void)
 }
 
 void agent_test_set_queues(QueueHandle_t channel_output_queue,
-                           QueueHandle_t telegram_output_queue)
+                           QueueHandle_t discord_output_queue)
 {
     s_channel_output_queue = channel_output_queue;
-    s_telegram_output_queue = telegram_output_queue;
+    s_discord_output_queue = discord_output_queue;
 }
 
 void agent_test_process_message(const char *user_message)
@@ -805,7 +900,7 @@ static void agent_task(void *arg)
 
 esp_err_t agent_start(QueueHandle_t input_queue,
                       QueueHandle_t channel_output_queue,
-                      QueueHandle_t telegram_output_queue)
+                      QueueHandle_t discord_output_queue)
 {
     if (!input_queue || !channel_output_queue) {
         ESP_LOGE(TAG, "Invalid queues for agent startup");
@@ -814,7 +909,7 @@ esp_err_t agent_start(QueueHandle_t input_queue,
 
     s_input_queue = input_queue;
     s_channel_output_queue = channel_output_queue;
-    s_telegram_output_queue = telegram_output_queue;
+    s_discord_output_queue = discord_output_queue;
     load_persona_from_store();
 
     if (xTaskCreate(agent_task, "agent", AGENT_TASK_STACK_SIZE, NULL,

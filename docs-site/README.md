@@ -1,26 +1,26 @@
-# zclaw docs-site
+# zclaw ドキュメントサイト
 
-Custom static docs site with a print-book visual style inspired by classic C references.
+クラシックなC言語リファレンスにインスピレーションを得た、印刷本風のビジュアルスタイルを持つカスタム静的ドキュメントサイト。
 
-## Preview locally
+## ローカルプレビュー
 
 ```bash
 ./scripts/docs-site.sh
-# or:
+# または:
 ./scripts/docs-site.sh --host 0.0.0.0 --port 8788 --open
 ```
 
-## Structure
+## 構造
 
-- `README.html` - web-formatted README landing page
-- `index.html` - overview and chapter map
-- `getting-started.html` - setup, flash, provision flow
-- `tools.html` - tool reference and schedule grammar
-- `architecture.html` - runtime/task model
-- `security.html` - security and ops
-- `build-your-own-tool.html` - custom tool design and maintenance workflow
-- `local-dev.html` - local dev, provisioning profiles, and hacking loops
-- `use-cases.html` - useful and playful scenarios for on-device assistants
-- `changelog.html` - release history and upgrade notes
-- `styles.css` - visual system and responsive layout
-- `app.js` - sidebar/nav behavior
+- `README.html` - WebフォーマットのREADMEランディングページ
+- `index.html` - 概要とチャプターマップ
+- `getting-started.html` - セットアップ、フラッシュ、プロビジョニングフロー
+- `tools.html` - ツールリファレンスとスケジュール文法
+- `architecture.html` - ランタイム/タスクモデル
+- `security.html` - セキュリティと運用
+- `build-your-own-tool.html` - カスタムツールの設計とメンテナンスワークフロー
+- `local-dev.html` - ローカル開発、プロビジョニングプロファイル、ハッキングループ
+- `use-cases.html` - オンデバイスアシスタントの実用的で遊び心のあるシナリオ
+- `changelog.html` - リリース履歴とアップグレードノート
+- `styles.css` - ビジュアルシステムとレスポンシブレイアウト
+- `app.js` - サイドバー/ナビゲーション動作

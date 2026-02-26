@@ -6,7 +6,7 @@
 
 typedef enum {
     MSG_SOURCE_CHANNEL = 0,
-    MSG_SOURCE_TELEGRAM = 1,
+    MSG_SOURCE_DISCORD = 1,
     MSG_SOURCE_CRON = 2,
 } message_source_t;
 
@@ -23,8 +23,8 @@ typedef struct {
 } channel_output_msg_t;
 
 typedef struct {
-    char text[TELEGRAM_MAX_MSG_LEN];
-    int64_t chat_id;
-} telegram_msg_t;
+    char text[DISCORD_MAX_MSG_LEN];
+    char channel_id[64];  // Discord channel ID (snowflake)
+} discord_msg_t;
 
 #endif // MESSAGES_H

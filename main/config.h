@@ -36,7 +36,7 @@
 // -----------------------------------------------------------------------------
 #define INPUT_QUEUE_LENGTH      8
 #define OUTPUT_QUEUE_LENGTH     8
-#define TELEGRAM_OUTPUT_QUEUE_LENGTH 4
+#define DISCORD_OUTPUT_QUEUE_LENGTH 16
 
 // -----------------------------------------------------------------------------
 // LLM Backend Configuration
@@ -64,8 +64,10 @@ typedef enum {
 #define LLM_AUTH_HEADER_BUF_SIZE  (sizeof("Bearer ") - 1 + LLM_API_KEY_MAX_LEN + 1)
 
 #define LLM_MAX_TOKENS          1024
+#define LLM_MAX_TOKENS_GPT5     2048
 #define HTTP_TIMEOUT_MS         30000   // 30 seconds for API calls
 #define LLM_HTTP_TIMEOUT_MS     20000   // 20 seconds for LLM API calls
+#define HTTP_GUARD_LOCK_TIMEOUT_MS 5000 // Shared HTTP/TLS lock wait budget
 #define LLM_MAX_RETRIES         3       // Max LLM attempts per round (including first attempt)
 #define LLM_RETRY_BASE_MS       2000    // Initial retry delay after a failed LLM call
 #define LLM_RETRY_MAX_MS        10000   // Maximum exponential retry delay
@@ -75,23 +77,13 @@ typedef enum {
 // System Prompt
 // -----------------------------------------------------------------------------
 #define SYSTEM_PROMPT \
-    "You are zclaw, an AI agent running on an ESP32 microcontroller. " \
-    "You have 400KB of RAM and run on bare metal with FreeRTOS. " \
-    "You can create and run custom tools, control GPIO pins, store persistent memories, and set schedules. " \
-    "You run on the device itself, not as a separate cloud session. " \
-    "Be concise - you're on a tiny chip. " \
+    "You are zclaw, a helpful AI assistant. " \
+    "You are friendly and conversational. " \
+    "Always respond in Japanese unless the user explicitly communicates in another language. " \
+    "Be concise but natural in conversation. " \
     "Return plain text only. Do not use markdown, code fences, bullet lists, backticks, " \
     "bold, italics, or headings. " \
-    "Use your tools to control hardware, remember things, and automate tasks. " \
-    "When summarizing capabilities, prioritize custom tools, schedules, memory, and GPIO before optional i2c_scan details. " \
-    "When asked for all or multiple GPIO states, prefer one gpio_read_all call instead of repeated gpio_read calls. " \
-    "If users explicitly ask to view or change persona/tone settings, use " \
-    "set_persona/get_persona/reset_persona tools. " \
-    "Persona is a persistent device setting on this ESP32 and survives reboot until changed or reset. " \
-    "Do not change persona based on ambiguous wording or casual chat. " \
-    "When asked what is currently saved/set on the device, use tools to verify instead of guessing. " \
-    "Users can create custom tools with create_tool. When you call a custom tool, " \
-    "you'll receive an action to execute - carry it out using your built-in tools."
+    "You can also help with hardware control, GPIO operations, scheduling, and memory storage when requested."
 
 // -----------------------------------------------------------------------------
 // GPIO tool safety range (configurable via Kconfig)
@@ -135,20 +127,21 @@ typedef enum {
 #define WIFI_RETRY_DELAY_MS     1000
 
 // -----------------------------------------------------------------------------
-// Telegram
+// Discord
 // -----------------------------------------------------------------------------
-#define TELEGRAM_API_URL        "https://api.telegram.org/bot"
-#define TELEGRAM_POLL_TIMEOUT   30      // Long polling timeout (seconds)
-// OpenRouter can require tighter heap headroom during TLS setup on small targets.
-// Use a shorter Telegram long-poll window only for that backend to reduce overlap.
-#define TELEGRAM_POLL_TIMEOUT_OPENROUTER 8
-#define TELEGRAM_POLL_INTERVAL  100     // ms between poll attempts on error
-#define TELEGRAM_MAX_MSG_LEN    4096    // Max message length
-#define TELEGRAM_FLUSH_ON_START 1       // Drop stale pending updates at startup
-#define TELEGRAM_STALE_POLL_LOG_INTERVAL 4          // Log every N stale-only polls
-#define TELEGRAM_STALE_POLL_RESYNC_STREAK 8         // Trigger auto-resync after this streak
-#define TELEGRAM_STALE_POLL_RESYNC_COOLDOWN_MS 60000 // Min gap between auto-resync attempts
-#define START_COMMAND_COOLDOWN_MS 30000 // Debounce repeated Telegram /start bursts
+#define DISCORD_API_URL        "https://discord.com/api/v10"
+#define DISCORD_GATEWAY_URL    "wss://gateway.discord.gg/?v=10&encoding=json"
+#define DISCORD_GATEWAY_VERSION 10
+#define DISCORD_HEARTBEAT_INTERVAL 41250  // Gateway heartbeat interval (ms)
+#define DISCORD_RECONNECT_DELAY 5000      // Delay before reconnect (ms)
+#define DISCORD_MAX_MSG_LEN    2000    // Max message length for Discord
+#define DISCORD_CONNECT_TIMEOUT_MS 30000 // WebSocket connect timeout
+#define DISCORD_POLL_INTERVAL_MS 8000    // Poll cadence tuned for low-RAM targets
+#define DISCORD_HTTP_TIMEOUT_MS 10000
+#define DISCORD_HTTP_BUFFER_SIZE 2048
+#define DISCORD_POLL_LIMIT 3
+#define DISCORD_MAX_POLL_RESPONSE_BYTES 6144
+#define START_COMMAND_COOLDOWN_MS 30000  // Debounce repeated /start bursts
 #define MESSAGE_REPLAY_COOLDOWN_MS 20000 // Suppress repeated identical non-command bursts
 
 // -----------------------------------------------------------------------------

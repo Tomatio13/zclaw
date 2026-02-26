@@ -15,13 +15,9 @@ idf_component_register(
         "tools_system.c"
         "memory.c"
         "json_util.c"
-        "telegram.c"
-        "telegram_poll_policy.c"
-        "telegram_chat_ids.c"
-        "telegram_token.c"
+        "discord.c"
         "cron.c"
         "memory_keys.c"
-        "telegram_update.c"
         "text_buffer.c"
         "security.c"
         "cron_utils.c"
@@ -30,6 +26,8 @@ idf_component_register(
         "boot_guard.c"
         "user_tools.c"
         "wifi_credentials.c"
+        "net_http_guard.c"
+        "utf8_utils.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

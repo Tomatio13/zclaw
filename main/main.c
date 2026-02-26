@@ -4,7 +4,7 @@
 #include "agent.h"
 #include "llm.h"
 #include "tools.h"
-#include "telegram.h"
+#include "discord.h"
 #include "cron.h"
 #include "ratelimit.h"
 #include "ota.h"
@@ -12,6 +12,7 @@
 #include "nvs_keys.h"
 #include "messages.h"
 #include "wifi_credentials.h"
+#include "net_http_guard.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -429,6 +430,7 @@ void app_main(void)
 #endif
 
     ESP_ERROR_CHECK(llm_init());
+    ESP_ERROR_CHECK(net_http_guard_init());
     ratelimit_init();
     tools_init();
     channel_init();
@@ -499,76 +501,71 @@ void app_main(void)
     // 9. Initialize rate limiter
     ratelimit_init();
 
-    // 10. Initialize Telegram
-#if CONFIG_ZCLAW_STUB_TELEGRAM
-    ESP_LOGW(TAG, "Telegram stub mode enabled; skipping Telegram startup");
-#else
-    esp_err_t telegram_init_err = telegram_init();  // Missing token is non-fatal
-    if (telegram_init_err != ESP_OK && telegram_init_err != ESP_ERR_NOT_FOUND) {
-        fail_fast_startup("telegram_init", telegram_init_err);
-    }
-#endif
+    // 10. Initialize shared HTTP/TLS guard (serialize low-RAM network clients)
+    ESP_ERROR_CHECK(net_http_guard_init());
 
-    // 11. Register tools
+    // 11. Initialize Discord
+    esp_err_t discord_init_err = discord_init();  // Missing token is non-fatal
+    if (discord_init_err != ESP_OK && discord_init_err != ESP_ERR_NOT_FOUND) {
+        fail_fast_startup("discord_init", discord_init_err);
+    }
+
+    // 12. Register tools
     tools_init();
 
-    // 12. Initialize USB serial channel
+    // 13. Initialize USB serial channel
     channel_init();
 
-    // 13. Create queues
+    // 14. Create queues
     QueueHandle_t input_queue = xQueueCreate(INPUT_QUEUE_LENGTH, sizeof(channel_msg_t));
     QueueHandle_t channel_output_queue = xQueueCreate(OUTPUT_QUEUE_LENGTH, sizeof(channel_output_msg_t));
-    QueueHandle_t telegram_output_queue = NULL;
-#if CONFIG_ZCLAW_STUB_TELEGRAM
-    bool telegram_enabled = false;
-#else
-    bool telegram_enabled = telegram_is_configured();
-#endif
-    if (telegram_enabled) {
-        telegram_output_queue = xQueueCreate(TELEGRAM_OUTPUT_QUEUE_LENGTH, sizeof(telegram_msg_t));
+    QueueHandle_t discord_output_queue = NULL;
+    bool discord_enabled = discord_is_configured();
+    if (discord_enabled) {
+        discord_output_queue = xQueueCreate(DISCORD_OUTPUT_QUEUE_LENGTH, sizeof(discord_msg_t));
     }
 
-    if (!input_queue || !channel_output_queue || (telegram_enabled && !telegram_output_queue)) {
+    if (!input_queue || !channel_output_queue || (discord_enabled && !discord_output_queue)) {
         ESP_LOGE(TAG, "Failed to create queues");
         esp_restart();
     }
 
-    // 14. Start channel task (USB serial)
+    // 15. Start channel task (USB serial)
     esp_err_t startup_err = channel_start(input_queue, channel_output_queue);
     if (startup_err != ESP_OK) {
         fail_fast_startup("channel_start", startup_err);
     }
 
-    // 15. Start Telegram channel
-    if (telegram_enabled) {
-        startup_err = telegram_start(input_queue, telegram_output_queue);
+    // 16. Start Discord channel
+    if (discord_enabled) {
+        startup_err = discord_start(input_queue, discord_output_queue);
         if (startup_err != ESP_OK) {
-            fail_fast_startup("telegram_start", startup_err);
+            fail_fast_startup("discord_start", startup_err);
         }
     }
 
-    // 16. Start agent task
-    startup_err = agent_start(input_queue, channel_output_queue, telegram_output_queue);
+    // 17. Start agent task
+    startup_err = agent_start(input_queue, channel_output_queue, discord_output_queue);
     if (startup_err != ESP_OK) {
         fail_fast_startup("agent_start", startup_err);
     }
 
-    // 17. Start cron task
+    // 18. Start cron task
     startup_err = cron_start(input_queue);
     if (startup_err != ESP_OK) {
         fail_fast_startup("cron_start", startup_err);
     }
 
-    // 18. Print ready message
+    // 19. Print ready message
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Ready! Free heap: %lu bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "");
 
-    // 19. Send startup notification on Telegram
-    if (telegram_enabled && telegram_is_configured()) {
-        telegram_send_startup();
+    // 20. Send startup notification on Discord
+    if (discord_enabled && discord_is_configured()) {
+        discord_send_startup();
     }
 
     // app_main returns - FreeRTOS scheduler continues running tasks

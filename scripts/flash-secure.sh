@@ -37,6 +37,9 @@ normalize_board_preset() {
         esp32s3-box-3|esp32-s3-box-3|box-3|esp-box-3)
             echo "esp32s3-box-3"
             ;;
+        m5stack-core|m5stack|m5stack_core)
+            echo "m5stack-core"
+            ;;
         *)
             echo ""
             ;;
@@ -51,7 +54,7 @@ resolve_board_preset() {
     normalized="$(normalize_board_preset "$BOARD_PRESET")"
     if [ -z "$normalized" ]; then
         print_error "Unknown board preset '$BOARD_PRESET'"
-        echo "Supported presets: esp32s3-box-3"
+        echo "Supported presets: esp32s3-box-3, m5stack-core"
         return 1
     fi
 
@@ -60,6 +63,10 @@ resolve_board_preset() {
         esp32s3-box-3)
             BOARD_SDKCONFIG_FILE="sdkconfig.esp32s3-box-3.defaults"
             IDF_TARGET_OVERRIDE="esp32s3"
+            ;;
+        m5stack-core)
+            BOARD_SDKCONFIG_FILE="sdkconfig.m5stack-core.defaults"
+            IDF_TARGET_OVERRIDE="esp32"
             ;;
         *)
             print_error "Unsupported board preset '$BOARD_PRESET'"
@@ -404,11 +411,12 @@ flash_encryption_enabled() {
 }
 
 usage() {
-    echo "Usage: $0 [PORT] [--production] [--kill-monitor] [--board <preset>] [--box-3]"
+    echo "Usage: $0 [PORT] [--production] [--kill-monitor] [--board <preset>] [--box-3] [--m5stack]"
     echo "  --production  Burn key with hardware read protection (recommended for deployed devices)"
     echo "  --kill-monitor  Stop stale ESP-IDF monitor processes holding the selected port"
-    echo "  --board         Apply a board preset (currently: esp32s3-box-3)"
+    echo "  --board         Apply a board preset (currently: esp32s3-box-3, m5stack-core)"
     echo "  --box-3         Alias for --board esp32s3-box-3"
+    echo "  --m5stack       Alias for --board m5stack-core"
 }
 
 source_idf_env() {
@@ -461,6 +469,9 @@ while [ $# -gt 0 ]; do
             ;;
         --box-3)
             BOARD_PRESET="esp32s3-box-3"
+            ;;
+        --m5stack|--m5stack-core)
+            BOARD_PRESET="m5stack-core"
             ;;
         --help|-h)
             usage
