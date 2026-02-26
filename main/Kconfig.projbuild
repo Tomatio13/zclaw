@@ -34,13 +34,6 @@ menu "zclaw Configuration"
             When enabled, returns hardcoded responses instead of calling the LLM API.
             Useful for testing without WiFi (QEMU emulator).
 
-    config ZCLAW_STUB_TELEGRAM
-        bool "Stub Telegram (for QEMU testing)"
-        default n
-        help
-            When enabled, skips Telegram initialization.
-            Useful for testing without WiFi.
-
     config ZCLAW_CHANNEL_UART
         bool "Use UART0 for local channel (QEMU-friendly)"
         default n
@@ -49,7 +42,7 @@ menu "zclaw Configuration"
             Enable this for interactive QEMU use.
 
     config ZCLAW_EMULATOR_MODE
-        bool "Offline emulator mode (skip WiFi/NTP/Telegram startup)"
+        bool "Offline emulator mode (skip WiFi/NTP/Discord startup)"
         default n
         help
             Starts only local channel + agent loop, without WiFi-dependent startup.

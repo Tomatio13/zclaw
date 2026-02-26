@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "nvs_keys.h"
 #include "text_buffer.h"
+#include "net_http_guard.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_tls.h"
@@ -13,6 +14,7 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -639,6 +641,7 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
     net_diag_snapshot_t snapshot_before = {0};
     net_diag_snapshot_t snapshot_after = {0};
     int status = -1;
+    bool http_lock_held = false;
 
     capture_net_diag_snapshot(&snapshot_before);
 
@@ -659,6 +662,19 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
     };
     response_buf[0] = '\0';
 
+    TickType_t lock_ticks = pdMS_TO_TICKS(HTTP_GUARD_LOCK_TIMEOUT_MS);
+    if (lock_ticks == 0) {
+        lock_ticks = pdMS_TO_TICKS(1);
+    }
+    if (!net_http_guard_lock(lock_ticks)) {
+        ESP_LOGW(TAG, "Shared HTTP lock timeout while starting LLM request");
+        capture_net_diag_snapshot(&snapshot_after);
+        log_http_diag("llm_request", NULL, ESP_ERR_TIMEOUT, -1, 0, false,
+                      started_us, NULL, &snapshot_before, &snapshot_after);
+        return ESP_ERR_TIMEOUT;
+    }
+    http_lock_held = true;
+
     esp_http_client_config_t config = {
         .url = llm_get_api_url(),
         .event_handler = http_event_handler,
@@ -673,6 +689,9 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
         capture_net_diag_snapshot(&snapshot_after);
         log_http_diag("llm_request", NULL, ESP_FAIL, -1, 0, false,
                       started_us, NULL, &snapshot_before, &snapshot_after);
+        if (http_lock_held) {
+            net_http_guard_unlock();
+        }
         return ESP_FAIL;
     }
 
@@ -692,6 +711,7 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
         if (!llm_build_bearer_auth_header(s_api_key, auth_header, sizeof(auth_header))) {
             ESP_LOGE(TAG, "API key length exceeds supported authorization header capacity");
             esp_http_client_cleanup(client);
+            net_http_guard_unlock();
             return ESP_ERR_INVALID_SIZE;
         }
         esp_http_client_set_header(client, "Authorization", auth_header);
@@ -731,6 +751,9 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
                   started_us, &ctx, &snapshot_before, &snapshot_after);
 
     esp_http_client_cleanup(client);
+    if (http_lock_held) {
+        net_http_guard_unlock();
+    }
 
     return err;
 #endif

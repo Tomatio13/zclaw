@@ -23,7 +23,7 @@
 TEST(security_sensitive_key_detection)
 {
     ASSERT(security_key_is_sensitive("wifi_pass"));
-    ASSERT(security_key_is_sensitive("tg_token"));
+    ASSERT(security_key_is_sensitive("discord_token"));
     ASSERT(security_key_is_sensitive("api_key"));
     ASSERT(!security_key_is_sensitive("wifi_ssid"));
     ASSERT(!security_key_is_sensitive("nickname"));
@@ -96,10 +96,10 @@ TEST(boot_guard_threshold)
     return 0;
 }
 
-TEST(telegram_channel_capacity_config)
+TEST(discord_channel_capacity_config)
 {
-    ASSERT(TELEGRAM_MAX_MSG_LEN > CHANNEL_RX_BUF_SIZE);
-    ASSERT(TELEGRAM_OUTPUT_QUEUE_LENGTH > 0);
+    ASSERT(DISCORD_MAX_MSG_LEN > CHANNEL_RX_BUF_SIZE);
+    ASSERT(DISCORD_OUTPUT_QUEUE_LENGTH > 0);
     return 0;
 }
 
@@ -144,8 +144,8 @@ int test_runtime_utils_all(void)
         failures++;
     }
 
-    printf("  telegram_channel_capacity_config... ");
-    if (test_telegram_channel_capacity_config() == 0) {
+    printf("  discord_channel_capacity_config... ");
+    if (test_discord_channel_capacity_config() == 0) {
         printf("OK\n");
     } else {
         failures++;

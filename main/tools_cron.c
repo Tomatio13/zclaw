@@ -16,6 +16,9 @@ static const timezone_alias_t TZ_ALIASES[] = {
     {"UTC", "UTC0"},
     {"Etc/UTC", "UTC0"},
     {"GMT", "UTC0"},
+    {"Asia/Tokyo", "JST-9"},
+    {"Japan", "JST-9"},
+    {"JST", "JST-9"},
     {"America/Los_Angeles", "PST8PDT,M3.2.0/2,M11.1.0/2"},
     {"US/Pacific", "PST8PDT,M3.2.0/2,M11.1.0/2"},
     {"PST", "PST8PDT,M3.2.0/2,M11.1.0/2"},
@@ -98,7 +101,7 @@ static bool resolve_timezone_to_posix(
         snprintf(
             error_out,
             error_out_len,
-            "Error: timezone name not recognized. Use UTC, America/Los_Angeles, America/Denver, America/Chicago, America/New_York, or a POSIX TZ string."
+            "Error: timezone name not recognized. Use UTC, Asia/Tokyo, America/Los_Angeles, America/Denver, America/Chicago, America/New_York, or a POSIX TZ string."
         );
         return false;
     }

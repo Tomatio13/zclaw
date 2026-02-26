@@ -19,16 +19,20 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 usage() {
-    echo "Usage: $0 [PORT] [--kill-monitor] [--board <preset>] [--box-3]"
+    echo "Usage: $0 [PORT] [--kill-monitor] [--board <preset>] [--box-3] [--m5stack]"
     echo "  --kill-monitor  Stop stale ESP-IDF monitor processes holding the selected port"
-    echo "  --board         Apply a board preset (currently: esp32s3-box-3)"
+    echo "  --board         Apply a board preset (currently: esp32s3-box-3, m5stack-core)"
     echo "  --box-3         Alias for --board esp32s3-box-3"
+    echo "  --m5stack       Alias for --board m5stack-core"
 }
 
 normalize_board_preset() {
     case "$1" in
         esp32s3-box-3|esp32-s3-box-3|box-3|esp-box-3)
             echo "esp32s3-box-3"
+            ;;
+        m5stack-core|m5stack|m5stack_core)
+            echo "m5stack-core"
             ;;
         *)
             echo ""
@@ -44,7 +48,7 @@ resolve_board_preset() {
     normalized="$(normalize_board_preset "$BOARD_PRESET")"
     if [ -z "$normalized" ]; then
         echo "Error: Unknown board preset '$BOARD_PRESET'"
-        echo "Supported presets: esp32s3-box-3"
+        echo "Supported presets: esp32s3-box-3, m5stack-core"
         return 1
     fi
 
@@ -53,6 +57,10 @@ resolve_board_preset() {
         esp32s3-box-3)
             BOARD_SDKCONFIG_FILE="sdkconfig.esp32s3-box-3.defaults"
             IDF_TARGET_OVERRIDE="esp32s3"
+            ;;
+        m5stack-core)
+            BOARD_SDKCONFIG_FILE="sdkconfig.m5stack-core.defaults"
+            IDF_TARGET_OVERRIDE="esp32"
             ;;
         *)
             echo "Error: Unsupported board preset '$BOARD_PRESET'"
@@ -437,6 +445,9 @@ while [ $# -gt 0 ]; do
             ;;
         --box-3)
             BOARD_PRESET="esp32s3-box-3"
+            ;;
+        --m5stack|--m5stack-core)
+            BOARD_PRESET="m5stack-core"
             ;;
         --help|-h)
             usage

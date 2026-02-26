@@ -3,6 +3,7 @@
 #include "tools.h"
 #include "user_tools.h"
 #include "llm.h"
+#include "utf8_utils.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include <string.h>
@@ -14,6 +15,22 @@ static const char *TAG = "json";
 // Keep parsed response tree alive for tool_input access
 static cJSON *s_parsed_response = NULL;
 
+static bool model_name_contains(const char *needle)
+{
+    const char *model = llm_get_model();
+    return model && needle && strstr(model, needle) != NULL;
+}
+
+static int llm_token_limit_for_request(void)
+{
+    int limit = LLM_MAX_TOKENS;
+    if (llm_get_backend() == LLM_BACKEND_OPENAI && model_name_contains("gpt-5") &&
+        limit < LLM_MAX_TOKENS_GPT5) {
+        limit = LLM_MAX_TOKENS_GPT5;
+    }
+    return limit;
+}
+
 static bool add_token_limit_field(cJSON *root)
 {
     const char *field = "max_tokens";
@@ -21,7 +38,7 @@ static bool add_token_limit_field(cJSON *root)
         // GPT-5 chat-completions models reject max_tokens and require max_completion_tokens.
         field = "max_completion_tokens";
     }
-    return cJSON_AddNumberToObject(root, field, LLM_MAX_TOKENS) != NULL;
+    return cJSON_AddNumberToObject(root, field, llm_token_limit_for_request()) != NULL;
 }
 
 static bool history_has_prior_tool_use(
@@ -231,8 +248,7 @@ static bool parse_anthropic_response(
         if (strcmp(type->valuestring, "text") == 0) {
             cJSON *text = cJSON_GetObjectItem(block, "text");
             if (text && cJSON_IsString(text)) {
-                strncpy(text_out, text->valuestring, text_out_len - 1);
-                text_out[text_out_len - 1] = '\0';
+                utf8_safe_strlcpy(text_out, text_out_len, text->valuestring);
             }
         } else if (strcmp(type->valuestring, "tool_use") == 0) {
             cJSON *name = cJSON_GetObjectItem(block, "name");
@@ -278,6 +294,13 @@ static char *build_openai_request(
         goto fail;
     }
 
+    if (llm_get_backend() == LLM_BACKEND_OPENAI && model_name_contains("gpt-5")) {
+        // Prefer visible short answers over long hidden reasoning on constrained devices.
+        if (!cJSON_AddStringToObject(root, "reasoning_effort", "minimal")) {
+            goto fail;
+        }
+    }
+
     cJSON *messages = cJSON_AddArrayToObject(root, "messages");
     if (!messages) {
         goto fail;
@@ -294,7 +317,9 @@ static char *build_openai_request(
     cJSON_AddItemToArray(messages, sys_msg);
 
     // Add history
+    ESP_LOGI(TAG, "Building OpenAI request with history_len=%d", history_len);
     for (int i = 0; i < history_len; i++) {
+        ESP_LOGI(TAG, "  history[%d]: role=%s, content=%.80s", i, history[i].role, history[i].content);
         cJSON *msg = cJSON_CreateObject();
         if (!msg) {
             goto fail;
@@ -438,6 +463,105 @@ fail:
     return NULL;
 }
 
+static bool append_text_chunk(char *dst, size_t dst_len, const char *chunk)
+{
+    if (!dst || dst_len == 0 || !chunk || chunk[0] == '\0') {
+        return false;
+    }
+    size_t used = strlen(dst);
+    if (used >= dst_len - 1) {
+        return false;
+    }
+    size_t remaining = dst_len - 1 - used;
+    size_t chunk_len = strlen(chunk);
+    if (chunk_len > remaining) {
+        chunk_len = utf8_safe_prefix_bytes(chunk, remaining);
+    }
+    if (chunk_len == 0) {
+        return false;
+    }
+    memcpy(dst + used, chunk, chunk_len);
+    dst[used + chunk_len] = '\0';
+    return true;
+}
+
+static void append_openai_content_text(cJSON *content_node, char *dst, size_t dst_len)
+{
+    if (!content_node || !dst || dst_len == 0) {
+        return;
+    }
+    if (cJSON_IsString(content_node) && content_node->valuestring) {
+        append_text_chunk(dst, dst_len, content_node->valuestring);
+        return;
+    }
+    if (!cJSON_IsArray(content_node)) {
+        return;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, content_node) {
+        if (cJSON_IsString(item) && item->valuestring) {
+            append_text_chunk(dst, dst_len, item->valuestring);
+            continue;
+        }
+        if (!cJSON_IsObject(item)) {
+            continue;
+        }
+
+        cJSON *text = cJSON_GetObjectItem(item, "text");
+        if (text && cJSON_IsString(text) && text->valuestring) {
+            append_text_chunk(dst, dst_len, text->valuestring);
+            continue;
+        }
+
+        cJSON *output_text = cJSON_GetObjectItem(item, "output_text");
+        if (output_text && cJSON_IsString(output_text) && output_text->valuestring) {
+            append_text_chunk(dst, dst_len, output_text->valuestring);
+            continue;
+        }
+
+        cJSON *refusal = cJSON_GetObjectItem(item, "refusal");
+        if (refusal && cJSON_IsString(refusal) && refusal->valuestring) {
+            append_text_chunk(dst, dst_len, refusal->valuestring);
+            continue;
+        }
+
+        cJSON *nested_content = cJSON_GetObjectItem(item, "content");
+        if (nested_content) {
+            append_openai_content_text(nested_content, dst, dst_len);
+        }
+    }
+}
+
+static void append_openai_responses_output(cJSON *output_node, char *dst, size_t dst_len)
+{
+    if (!output_node || !cJSON_IsArray(output_node)) {
+        return;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, output_node) {
+        if (!cJSON_IsObject(item)) {
+            continue;
+        }
+
+        cJSON *content = cJSON_GetObjectItem(item, "content");
+        if (content) {
+            append_openai_content_text(content, dst, dst_len);
+        }
+
+        cJSON *text = cJSON_GetObjectItem(item, "text");
+        if (text && cJSON_IsString(text) && text->valuestring) {
+            append_text_chunk(dst, dst_len, text->valuestring);
+        }
+
+        cJSON *output_text = cJSON_GetObjectItem(item, "output_text");
+        if (output_text && cJSON_IsString(output_text) && output_text->valuestring) {
+            append_text_chunk(dst, dst_len, output_text->valuestring);
+        }
+    }
+}
+
 static bool parse_openai_response(
     cJSON *root,
     char *text_out,
@@ -448,6 +572,8 @@ static bool parse_openai_response(
     size_t tool_id_len,
     cJSON **tool_input_out)
 {
+    bool found_tool_calls = false;
+
     // OpenAI: choices[0].message
     cJSON *choices = cJSON_GetObjectItem(root, "choices");
     if (!choices || !cJSON_IsArray(choices) || cJSON_GetArraySize(choices) == 0) {
@@ -456,22 +582,31 @@ static bool parse_openai_response(
     }
 
     cJSON *choice = cJSON_GetArrayItem(choices, 0);
+    cJSON *finish_reason = cJSON_GetObjectItem(choice, "finish_reason");
     cJSON *message = cJSON_GetObjectItem(choice, "message");
     if (!message) {
         ESP_LOGE(TAG, "No message in choice");
         return false;
     }
 
-    // Check for text content
+    // Check for text content (string or block-array style)
     cJSON *content = cJSON_GetObjectItem(message, "content");
-    if (content && cJSON_IsString(content)) {
-        strncpy(text_out, content->valuestring, text_out_len - 1);
-        text_out[text_out_len - 1] = '\0';
+    append_openai_content_text(content, text_out, text_out_len);
+
+    cJSON *refusal = cJSON_GetObjectItem(message, "refusal");
+    if (text_out[0] == '\0' && refusal && cJSON_IsString(refusal) && refusal->valuestring) {
+        append_text_chunk(text_out, text_out_len, refusal->valuestring);
+    }
+
+    cJSON *legacy_text = cJSON_GetObjectItem(choice, "text");
+    if (text_out[0] == '\0' && legacy_text && cJSON_IsString(legacy_text) && legacy_text->valuestring) {
+        append_text_chunk(text_out, text_out_len, legacy_text->valuestring);
     }
 
     // Check for tool_calls
     cJSON *tool_calls = cJSON_GetObjectItem(message, "tool_calls");
     if (tool_calls && cJSON_IsArray(tool_calls) && cJSON_GetArraySize(tool_calls) > 0) {
+        found_tool_calls = true;
         cJSON *tc = cJSON_GetArrayItem(tool_calls, 0);
 
         cJSON *id = cJSON_GetObjectItem(tc, "id");
@@ -500,6 +635,32 @@ static bool parse_openai_response(
                     *tool_input_out = parsed_args;
                 }
             }
+        }
+    }
+
+    if (text_out[0] == '\0' && !found_tool_calls) {
+        // Fallbacks for responses-like payloads seen on OpenAI-compatible gateways.
+        cJSON *output_text = cJSON_GetObjectItem(root, "output_text");
+        if (output_text && cJSON_IsString(output_text) && output_text->valuestring) {
+            append_text_chunk(text_out, text_out_len, output_text->valuestring);
+        }
+        cJSON *output = cJSON_GetObjectItem(root, "output");
+        append_openai_responses_output(output, text_out, text_out_len);
+    }
+
+    if (text_out[0] == '\0' && !found_tool_calls) {
+        char *msg_dump = cJSON_PrintUnformatted(message);
+        if (msg_dump) {
+            if (finish_reason && cJSON_IsString(finish_reason) && finish_reason->valuestring) {
+                ESP_LOGW(TAG,
+                         "OpenAI response had no text/tool_calls. finish_reason=%s message=%.240s",
+                         finish_reason->valuestring, msg_dump);
+            } else {
+                ESP_LOGW(TAG, "OpenAI response had no text/tool_calls. message=%.240s", msg_dump);
+            }
+            free(msg_dump);
+        } else {
+            ESP_LOGW(TAG, "OpenAI response had no text and no tool_calls");
         }
     }
 
