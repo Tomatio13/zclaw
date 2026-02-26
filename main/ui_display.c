@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -40,6 +41,30 @@ typedef struct {
     uint8_t rows[7];
 } glyph_t;
 
+typedef struct {
+    int y;
+    int speed;
+    int length;
+    int gap;
+} matrix_column_t;
+
+typedef struct {
+    char ch;
+    float brightness;
+    bool is_head;
+} matrix_cell_t;
+
+#define MATRIX_SCALE      2
+#define MATRIX_CELL_W     (6 * MATRIX_SCALE)
+#define MATRIX_CELL_H     (7 * MATRIX_SCALE)
+#define MATRIX_COLS       (LCD_WIDTH / MATRIX_CELL_W)
+#define MATRIX_ROWS       (LCD_HEIGHT / MATRIX_CELL_H)
+
+static const char *MATRIX_CHARS = "0123456789";
+static matrix_column_t s_matrix_columns[MATRIX_COLS];
+static matrix_cell_t s_matrix_grid[MATRIX_ROWS][MATRIX_COLS];
+static uint32_t s_matrix_tick = 0;
+
 static const glyph_t FONT_5X7[] = {
     {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
     {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
@@ -73,9 +98,41 @@ static const uint8_t *glyph_rows(char c)
     return FONT_5X7[sizeof(FONT_5X7) / sizeof(FONT_5X7[0]) - 1].rows; // space
 }
 
+static uint32_t rand_u32(void)
+{
+    return esp_random();
+}
+
+static int rand_range(int min_inclusive, int max_inclusive)
+{
+    if (max_inclusive <= min_inclusive) {
+        return min_inclusive;
+    }
+    uint32_t span = (uint32_t)(max_inclusive - min_inclusive + 1);
+    return min_inclusive + (int)(rand_u32() % span);
+}
+
+static char random_matrix_char(void)
+{
+    size_t n = strlen(MATRIX_CHARS);
+    return MATRIX_CHARS[rand_u32() % n];
+}
+
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
     return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xF8) >> 3));
+}
+
+static uint16_t scale_blue(float b)
+{
+    if (b <= 0.0f) {
+        return rgb565(0x00, 0x00, 0x00);
+    }
+    if (b > 1.0f) {
+        b = 1.0f;
+    }
+    uint8_t blue = (uint8_t)(0x44 + (0xFF - 0x44) * b);
+    return rgb565(0x00, 0x66, blue);
 }
 
 static void lcd_reset_pulse(void)
@@ -131,6 +188,82 @@ static esp_err_t lcd_set_window(int xs, int xe, int ys, int ye)
     ESP_RETURN_ON_ERROR(lcd_send_cmd(0x2A, data_col, sizeof(data_col)), TAG, "CASET");
     ESP_RETURN_ON_ERROR(lcd_send_cmd(0x2B, data_row, sizeof(data_row)), TAG, "RASET");
     return ESP_OK;
+}
+
+static void matrix_init(void)
+{
+    memset(s_matrix_grid, 0, sizeof(s_matrix_grid));
+    for (int x = 0; x < MATRIX_COLS; x++) {
+        s_matrix_columns[x].y = -rand_range(0, MATRIX_ROWS);
+        s_matrix_columns[x].speed = (rand_u32() % 100 < 70) ? 1 : 2;
+        s_matrix_columns[x].length = rand_range(2, 5);
+        s_matrix_columns[x].gap = rand_range(0, 2);
+    }
+}
+
+static void matrix_step(void)
+{
+    s_matrix_tick++;
+
+    for (int y = 0; y < MATRIX_ROWS; y++) {
+        for (int x = 0; x < MATRIX_COLS; x++) {
+            matrix_cell_t *cell = &s_matrix_grid[y][x];
+            cell->is_head = false;
+            cell->brightness -= 0.08f;
+            if (cell->brightness < 0.0f) {
+                cell->brightness = 0.0f;
+            }
+            if (cell->brightness > 0.15f && cell->brightness < 0.7f && (rand_u32() % 100) < 4) {
+                cell->ch = random_matrix_char();
+            }
+            if (cell->brightness <= 0.01f) {
+                cell->ch = ' ';
+            }
+        }
+    }
+
+    for (int x = 0; x < MATRIX_COLS; x++) {
+        matrix_column_t *col = &s_matrix_columns[x];
+        if (col->gap > 0) {
+            col->gap--;
+            continue;
+        }
+
+        if ((s_matrix_tick % (uint32_t)col->speed) != 0) {
+            continue;
+        }
+
+        col->y++;
+
+        if (col->y >= 0 && col->y < MATRIX_ROWS) {
+            matrix_cell_t *head = &s_matrix_grid[col->y][x];
+            head->ch = random_matrix_char();
+            head->brightness = 1.0f;
+            head->is_head = true;
+        }
+
+        for (int t = 1; t <= col->length; t++) {
+            int ty = col->y - t;
+            if (ty < 0 || ty >= MATRIX_ROWS) {
+                continue;
+            }
+            matrix_cell_t *trail = &s_matrix_grid[ty][x];
+            if (trail->ch == ' ') {
+                trail->ch = random_matrix_char();
+            }
+            float trail_b = 1.0f - ((float)t / (float)col->length);
+            if (trail_b > trail->brightness) {
+                trail->brightness = trail_b;
+            }
+        }
+
+        if (col->y - col->length > MATRIX_ROWS) {
+            col->y = -rand_range(0, 2);
+            col->speed = (rand_u32() % 100 < 70) ? 1 : 2;
+            col->length = rand_range(2, 5);
+            col->gap = rand_range(0, 3);
+        }
+    }
 }
 
 typedef struct {
@@ -193,6 +326,34 @@ static void rasterize_text_row(const text_render_t *spec, int row, uint16_t *lin
     }
 }
 
+static void rasterize_char_row(char ch, int origin_x, int origin_y, int scale, uint16_t color,
+                               int row, uint16_t *line_buf)
+{
+    int local_y = row - origin_y;
+    int glyph_h = 7 * scale;
+    if (local_y < 0 || local_y >= glyph_h) {
+        return;
+    }
+
+    int glyph_row = local_y / scale;
+    const uint8_t *rows = glyph_rows(ch);
+    uint8_t bits = rows[glyph_row];
+    for (int col = 0; col < 5; col++) {
+        if (((bits >> (4 - col)) & 0x01) == 0) {
+            continue;
+        }
+        int pixel_x0 = origin_x + (col * scale);
+        for (int sx = 0; sx < scale; sx++) {
+            int px = pixel_x0 + sx;
+            if (px < 0 || px >= LCD_WIDTH) {
+                continue;
+            }
+            int mirrored_x = (LCD_WIDTH - 1) - px;
+            line_buf[mirrored_x] = color;
+        }
+    }
+}
+
 static esp_err_t render_clock_and_status(bool thinking_active, const char *time_text)
 {
     const uint16_t black = rgb565(0x00, 0x00, 0x00);
@@ -207,10 +368,30 @@ static esp_err_t render_clock_and_status(bool thinking_active, const char *time_
         prepare_centered_text(&thinking_spec, "Thinking....", 142, 3, clock_blue);
     }
 
+    matrix_step();
+
     for (int row = 0; row < LCD_HEIGHT; row++) {
         for (int x = 0; x < LCD_WIDTH; x++) {
             line_buf[x] = black;
         }
+
+        // Matrix layer
+        for (int gy = 0; gy < MATRIX_ROWS; gy++) {
+            int char_top = gy * MATRIX_CELL_H;
+            if (row < char_top || row >= char_top + MATRIX_CELL_H) {
+                continue;
+            }
+            for (int gx = 0; gx < MATRIX_COLS; gx++) {
+                matrix_cell_t *cell = &s_matrix_grid[gy][gx];
+                if (cell->brightness <= 0.08f || cell->ch == ' ') {
+                    continue;
+                }
+                uint16_t c = cell->is_head ? rgb565(0x80, 0xC0, 0xFF) : scale_blue(cell->brightness);
+                rasterize_char_row(cell->ch, gx * MATRIX_CELL_W, char_top, MATRIX_SCALE, c, row, line_buf);
+            }
+        }
+
+        // Overlay layer
         rasterize_text_row(&time_spec, row, line_buf);
         if (thinking_active) {
             rasterize_text_row(&thinking_spec, row, line_buf);
@@ -332,6 +513,7 @@ esp_err_t ui_display_init(void)
     ESP_RETURN_ON_ERROR(lcd_init_sequence(), TAG, "lcd_init_sequence");
     gpio_set_level(LCD_PIN_BL, 1);
     ESP_RETURN_ON_ERROR(lcd_clear_fullscreen(rgb565(0x00, 0x00, 0x00)), TAG, "lcd_clear_fullscreen");
+    matrix_init();
 
     s_display_ready = true;
 
