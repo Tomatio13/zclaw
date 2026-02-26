@@ -28,6 +28,7 @@ idf_component_register(
         "wifi_credentials.c"
         "net_http_guard.c"
         "utf8_utils.c"
+        "ui_display.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -39,6 +40,7 @@ idf_component_register(
         json
         driver
         lwip
+        esp_lcd
         esp_driver_usb_serial_jtag
         app_update
 )

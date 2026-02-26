@@ -13,6 +13,7 @@
 #include "messages.h"
 #include "wifi_credentials.h"
 #include "net_http_guard.h"
+#include "ui_display.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -494,6 +495,17 @@ void app_main(void)
 
     // 7. Initialize cron (includes NTP sync)
     ESP_ERROR_CHECK(cron_init());
+    // Keep display clock in JST by default for M5Stack deployments.
+    esp_err_t tz_err = cron_set_timezone("JST-9");
+    if (tz_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set timezone to JST: %s", esp_err_to_name(tz_err));
+    }
+
+    // 7.5 Initialize on-device display UI (M5Stack Core/Basic when available)
+    esp_err_t ui_init_err = ui_display_init();
+    if (ui_init_err != ESP_OK && ui_init_err != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Display UI init failed: %s", esp_err_to_name(ui_init_err));
+    }
 
     // 8. Initialize LLM client
     ESP_ERROR_CHECK(llm_init());

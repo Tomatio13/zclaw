@@ -9,6 +9,7 @@
 #include "memory.h"
 #include "nvs_keys.h"
 #include "utf8_utils.h"
+#include "ui_display.h"
 #include "cJSON.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -893,7 +894,14 @@ static void agent_task(void *arg)
 
     while (1) {
         if (xQueueReceive(s_input_queue, &msg, portMAX_DELAY) == pdTRUE) {
+            bool is_discord_message = (msg.source == MSG_SOURCE_DISCORD);
+            if (is_discord_message) {
+                ui_display_set_thinking(true);
+            }
             process_message(msg.text, response_chat_id_for_source(msg.source, msg.chat_id));
+            if (is_discord_message) {
+                ui_display_set_thinking(false);
+            }
         }
     }
 }
